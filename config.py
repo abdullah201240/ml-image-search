@@ -9,11 +9,15 @@ DEVICE = 'cpu'  # Change to 'cuda' if you have GPU
 # Server Configuration
 FLASK_HOST = '0.0.0.0'
 FLASK_PORT = 5000
-DEBUG = True
+DEBUG = False  # Set to False for production
 
 # Search Configuration
-SIMILARITY_THRESHOLD = 0.15  # Minimum similarity score (0-1)
-MAX_RESULTS = 10  # Maximum number of results to return
+SIMILARITY_THRESHOLD = 0.10  # Lowered for better sensitivity with large datasets
+MAX_RESULTS = 5  # Maximum number of results to return (most accurate 5)
+
+# Performance Configuration for Large Datasets
+BATCH_SIZE = 64  # Increased batch size for faster processing of large datasets
+CACHE_REFRESH_SECONDS = 1800  # 30 minutes - longer cache for large datasets
 
 # NestJS Server Configuration
 NESTJS_SERVER = 'http://localhost:3000'
