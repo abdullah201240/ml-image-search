@@ -44,7 +44,7 @@ CACHE_REFRESH_SECONDS = int(os.getenv('CACHE_REFRESH_SECONDS', 60 * 30))  # 30 m
 NESTJS_SERVER = os.getenv('NESTJS_SERVER', 'http://localhost:3000')
 MEDICINES_ENDPOINT = os.getenv('MEDICINES_ENDPOINT', '/medicines')
 FLASK_HOST = os.getenv('FLASK_HOST', '0.0.0.0')
-FLASK_PORT = int(os.getenv('FLASK_PORT', 5000))
+FLASK_PORT = int(os.getenv('FLASK_PORT', 5001))
 DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
 
 # ----------------------
