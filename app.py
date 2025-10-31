@@ -192,51 +192,67 @@ def fetch_medicines_from_nestjs() -> List[Dict[str, Any]]:
         if time.time() - medicines_cache_time < CACHE_REFRESH_SECONDS and medicines_cache:
             return medicines_cache
 
-        # Fetch all medicines by not sending pagination parameters
-        # This will return all medicines in a single response (no pagination)
+        # Fetch medicines with pagination to avoid memory issues
         url = f"{NESTJS_SERVER.rstrip('/')}/{MEDICINES_ENDPOINT.lstrip('/')}"
-        logger.info(f"Fetching all medicines from: {url}")
-        r = requests.get(url, timeout=10)
-        r.raise_for_status()
-        data = r.json()
+        logger.info(f"Fetching medicines from: {url}")
         
-        # Handle both paginated and non-paginated responses
-        # If it's paginated, it will have a 'data' field and 'total' field
-        # If it's not paginated, it will be a direct array
-        if isinstance(data, dict) and 'data' in data:
-            # Paginated response - but we want ALL medicines, so we need to fetch all pages
-            total = data.get('total', 0)
-            page = data.get('page', 1)
-            limit = data.get('limit', 10)
-            total_pages = data.get('totalPages', 1)
+        all_medicines = []
+        page = 1
+        limit = 50  # Fetch in smaller batches to avoid memory issues
+        total_fetched = 0
+        max_total = 1000  # Safety limit to prevent infinite loops
+        
+        while total_fetched < max_total:
+            page_url = f"{url}?page={page}&limit={limit}"
+            logger.info(f"Fetching page {page} from: {page_url}")
             
-            logger.info(f"Found paginated response: {total} medicines across {total_pages} pages")
-            
-            # Fetch all pages
-            all_medicines = data['data']  # Start with first page
-            for page_num in range(2, total_pages + 1):
-                page_url = f"{url}?page={page_num}&limit={limit}"
-                logger.info(f"Fetching page {page_num} from: {page_url}")
-                page_response = requests.get(page_url, timeout=10)
-                page_response.raise_for_status()
-                page_data = page_response.json()
-                if isinstance(page_data, dict) and 'data' in page_data:
-                    all_medicines.extend(page_data['data'])
+            try:
+                r = requests.get(page_url, timeout=15)  # Increased timeout
+                r.raise_for_status()
+                data = r.json()
+                
+                # Handle both paginated and non-paginated responses
+                if isinstance(data, dict) and 'data' in data:
+                    medicines = data['data']
+                    total = data.get('total', len(medicines))
+                    total_pages = data.get('totalPages', 1)
+                    
+                    logger.info(f"Page {page}: fetched {len(medicines)} medicines")
+                    all_medicines.extend(medicines)
+                    total_fetched += len(medicines)
+                    
+                    # If this is the last page, break
+                    if page >= total_pages:
+                        break
                 else:
-                    all_medicines.extend(page_data)
+                    # Non-paginated response
+                    medicines = data if isinstance(data, list) else []
+                    logger.info(f"Fetched {len(medicines)} medicines (non-paginated)")
+                    all_medicines.extend(medicines)
+                    total_fetched += len(medicines)
+                    break
+                    
+            except requests.exceptions.RequestException as e:
+                logger.error(f"Failed to fetch page {page}: {e}")
+                break
+            except Exception as e:
+                logger.error(f"Error parsing page {page}: {e}")
+                break
+                
+            page += 1
             
-            meds = all_medicines
-        else:
-            # Non-paginated response or already contains all data
-            meds = data if isinstance(data, list) else []
+            # Safety check to prevent infinite loops
+            if page > 50:  # Max 50 pages
+                logger.warning("Reached maximum page limit (50)")
+                break
         
-        if not isinstance(meds, list):
-            meds = []
+        if not isinstance(all_medicines, list):
+            all_medicines = []
             
-        medicines_cache = meds
+        medicines_cache = all_medicines
         medicines_cache_time = time.time()
-        logger.info(f"Fetched {len(meds)} medicines")
-        return meds
+        logger.info(f"Total fetched medicines: {len(all_medicines)}")
+        return all_medicines
     except Exception as e:
         logger.exception(f"Failed to fetch medicines: {e}")
         # fallback to cached if present
@@ -426,6 +442,7 @@ def refresh_medicines():
     """Force refresh the medicine cache and rebuild embeddings index"""
     global medicines_cache, medicines_cache_time
     try:
+        logger.info("Starting medicine cache refresh")
         # Clear the cache
         medicines_cache = []
         medicines_cache_time = 0
@@ -433,10 +450,13 @@ def refresh_medicines():
         # Rebuild embeddings and index
         build_embeddings_and_index(force_rebuild=True)
         
+        medicines_count = len(medicines_cache) if medicines_cache else 0
+        logger.info(f"Medicine cache refresh completed. Medicines count: {medicines_count}")
+        
         return jsonify({
             'status': 'success', 
             'message': 'Medicine cache refreshed and index rebuilt',
-            'medicines_count': len(medicines_cache) if medicines_cache else 0
+            'medicines_count': medicines_count
         }), 200
     except Exception as e:
         logger.exception(f"Failed to refresh medicines: {e}")

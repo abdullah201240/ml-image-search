@@ -8,7 +8,7 @@ DEVICE = 'cpu'  # Change to 'cuda' if you have GPU
 
 # Server Configuration
 FLASK_HOST = '0.0.0.0'
-FLASK_PORT = 5000
+FLASK_PORT = 5001
 DEBUG = False  # Set to False for production
 
 # Search Configuration
