@@ -6,6 +6,9 @@ import math
 import logging
 from typing import List, Dict, Any, Tuple
 
+# Fix for OpenMP library conflict on macOS
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 import numpy as np
 from PIL import Image
 from io import BytesIO
@@ -116,6 +119,13 @@ def batch_get_image_embeddings(paths: List[str], batch_size: int = BATCH_SIZE) -
     for idx, p in enumerate(paths):
         try:
             img = image_to_pil(p)
+            # Check image size to prevent memory issues
+            if hasattr(img, 'size'):
+                width, height = img.size
+                # Limit image size to prevent memory issues
+                max_size = 512
+                if width > max_size or height > max_size:
+                    img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
             batch_images.append(img)
             batch_idx_map.append(idx)
         except Exception as e:
@@ -124,29 +134,44 @@ def batch_get_image_embeddings(paths: List[str], batch_size: int = BATCH_SIZE) -
             continue
 
         if len(batch_images) >= batch_size:
+            try:
+                with torch.no_grad():
+                    inputs = processor(images=batch_images, return_tensors='pt', padding=True).to(DEVICE)
+                    feats = model.get_image_features(**inputs)
+                    feats = feats / feats.norm(p=2, dim=-1, keepdim=True)
+                    feats = feats.cpu().numpy()
+                    # append to proper indices
+                    for i, emb in zip(batch_idx_map, feats):
+                        all_embeddings.append(emb)
+            except Exception as batch_error:
+                logger.exception(f"Error processing batch: {batch_error}")
+                # Fill with zero vectors for this batch
+                for _ in batch_idx_map:
+                    all_embeddings.append(None)
+            finally:
+                batch_images = []
+                batch_idx_map = []
+
+    # final batch
+    if batch_images:
+        try:
             with torch.no_grad():
                 inputs = processor(images=batch_images, return_tensors='pt', padding=True).to(DEVICE)
                 feats = model.get_image_features(**inputs)
                 feats = feats / feats.norm(p=2, dim=-1, keepdim=True)
                 feats = feats.cpu().numpy()
-                # append to proper indices
                 for i, emb in zip(batch_idx_map, feats):
                     all_embeddings.append(emb)
-            batch_images = []
-            batch_idx_map = []
-
-    # final batch
-    if batch_images:
-        with torch.no_grad():
-            inputs = processor(images=batch_images, return_tensors='pt', padding=True).to(DEVICE)
-            feats = model.get_image_features(**inputs)
-            feats = feats / feats.norm(p=2, dim=-1, keepdim=True)
-            feats = feats.cpu().numpy()
-            for i, emb in zip(batch_idx_map, feats):
-                all_embeddings.append(emb)
+        except Exception as batch_error:
+            logger.exception(f"Error processing final batch: {batch_error}")
+            # Fill with zero vectors for this batch
+            for _ in batch_idx_map:
+                all_embeddings.append(None)
 
     # Replace None entries with zero vectors if any
-    D = all_embeddings[0].shape[0] if any(e is not None for e in all_embeddings) else 512
+    D = 512  # CLIP embedding dimension
+    if all_embeddings and any(e is not None for e in all_embeddings):
+        D = all_embeddings[0].shape[0]
     final = np.zeros((len(paths), D), dtype=np.float32)
     for i, v in enumerate(all_embeddings):
         if v is None:
@@ -469,6 +494,7 @@ def search_by_image():
     if 'image' not in request.files and not request.json:
         return jsonify({'error': 'No image provided'}), 400
 
+    query_img_input = None
     try:
         # get image bytes
         if 'image' in request.files:
@@ -488,12 +514,26 @@ def search_by_image():
             r.raise_for_status()
             query_img_input = r.content
 
-        # compute embedding
-        query_emb = batch_get_image_embeddings([query_img_input], batch_size=1)[0]
+        # compute embedding with better error handling
+        try:
+            query_emb = batch_get_image_embeddings([query_img_input], batch_size=1)[0]
+        except Exception as embed_error:
+            logger.exception(f"Failed to compute embedding: {embed_error}")
+            # cleanup uploaded file
+            if isinstance(query_img_input, str) and os.path.exists(query_img_input):
+                try:
+                    os.remove(query_img_input)
+                except Exception:
+                    pass
+            return jsonify({'error': 'Failed to process image - embedding computation failed'}), 500
 
         if embeddings is None or embeddings.shape[0] == 0:
             # attempt to build embeddings if not present
-            build_embeddings_and_index()
+            try:
+                build_embeddings_and_index()
+            except Exception as build_error:
+                logger.exception(f"Failed to build embeddings: {build_error}")
+                return jsonify({'error': 'Failed to initialize search index'}), 500
 
         results = search_top_k(query_emb, top_k=MAX_RESULTS)
 
@@ -507,7 +547,13 @@ def search_by_image():
         return jsonify(results), 200
     except Exception as e:
         logger.exception(f"Search error: {e}")
-        return jsonify({'error': str(e)}), 500
+        # cleanup uploaded file in case of error
+        if query_img_input and isinstance(query_img_input, str) and os.path.exists(query_img_input):
+            try:
+                os.remove(query_img_input)
+            except Exception:
+                pass
+        return jsonify({'error': f'Internal server error: {str(e)}'}), 500
 
 
 # ----------------------
@@ -532,4 +578,5 @@ if __name__ == '__main__':
     except Exception:
         logger.exception('Failed to build embeddings at startup')
 
-    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=DEBUG)
+    # Run with threading enabled to handle multiple requests
+    app.run(host=FLASK_HOST, port=FLASK_PORT, debug=DEBUG, threaded=True, processes=1)
