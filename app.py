@@ -35,9 +35,9 @@ except Exception:
 MODEL_NAME = os.getenv('CLIP_MODEL', 'openai/clip-vit-base-patch32')
 DEVICE = os.getenv('DEVICE', 'cuda' if torch.cuda.is_available() else 'cpu')
 UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', 'uploads/query')
-MEDICINE_IMAGE_FOLDER = os.getenv('MEDICINE_IMAGE_FOLDER', '../midi-vision-server/uploads/medicines')
+MEDICINE_IMAGE_FOLDER = os.getenv('MEDICINE_IMAGE_FOLDER', os.path.abspath('../midi-vision-server/uploads/medicines'))
 ALLOWED_EXTENSIONS = set(['png', 'jpg', 'jpeg', 'webp'])
-SIMILARITY_THRESHOLD = float(os.getenv('SIMILARITY_THRESHOLD', 0.10))  # Lowered for better sensitivity
+SIMILARITY_THRESHOLD = float(os.getenv('SIMILARITY_THRESHOLD', 0.25))  # Increased from 0.10 to 0.25 (25%)
 MAX_RESULTS = int(os.getenv('MAX_RESULTS', 5))
 BATCH_SIZE = int(os.getenv('BATCH_SIZE', 64))  # Increased for large datasets
 EMBEDDINGS_FILE = os.getenv('EMBEDDINGS_FILE', 'cache/medicine_embeddings.npy')
@@ -318,7 +318,11 @@ def build_embeddings_and_index(force_rebuild: bool = False):
 
     # Otherwise build fresh
     logger.info('Building embeddings from medicine images')
+    logger.info(f'Medicine image folder path: {MEDICINE_IMAGE_FOLDER}')
+    logger.info(f'Medicine image folder exists: {os.path.exists(MEDICINE_IMAGE_FOLDER)}')
+    
     medicines = fetch_medicines_from_nestjs()
+    logger.info(f'Fetched {len(medicines)} medicines from backend')
 
     rows = []
     meta = []
@@ -330,6 +334,7 @@ def build_embeddings_and_index(force_rebuild: bool = False):
         for image_url in imgs:
             image_filename = image_url.split('/')[-1]
             candidate_path = os.path.join(MEDICINE_IMAGE_FOLDER, image_filename)
+            logger.info(f'Checking image: {candidate_path} - exists: {os.path.exists(candidate_path)}')
             if not os.path.exists(candidate_path):
                 logger.debug(f'Image not found: {candidate_path}')
                 continue
@@ -342,12 +347,15 @@ def build_embeddings_and_index(force_rebuild: bool = False):
                 'medicine': med  # full medicine object (could be heavy)
             })
 
+    logger.info(f'Found {len(image_paths)} valid medicine images')
+    
     if not image_paths:
         logger.warning('No medicine images found to build embeddings')
         embeddings = np.zeros((0, 512), dtype=np.float32)
         metadata = []
         return
 
+    logger.info('Computing embeddings for medicine images...')
     vecs = batch_get_image_embeddings(image_paths, batch_size=BATCH_SIZE)
 
     # Normalize (should already be normalized by model but ensure float32)
@@ -359,15 +367,18 @@ def build_embeddings_and_index(force_rebuild: bool = False):
     metadata = meta
 
     # save to disk
+    logger.info('Saving embeddings and metadata to disk...')
     np.save(EMBEDDINGS_FILE, embeddings)
     with open(METADATA_FILE, 'w', encoding='utf-8') as f:
         json.dump(metadata, f, ensure_ascii=False, indent=2)
 
     # build faiss index if available
     if _HAS_FAISS and embeddings.shape[0] > 0:
+        logger.info('Building FAISS index...')
         faiss_index = build_faiss_index(embeddings)
         try:
             faiss.write_index(faiss_index, FAISS_INDEX_FILE)
+            logger.info('FAISS index saved to disk')
         except Exception as e:
             logger.warning(f'Could not write FAISS index to disk: {e}')
 
@@ -397,7 +408,7 @@ def search_top_k(query_embedding: np.ndarray, top_k: int = MAX_RESULTS) -> List[
     results = []
 
     if _HAS_FAISS and faiss_index is not None:
-        idxs, scores = faiss_search(q, top_k)
+        idxs, scores = faiss_search(q, top_k * 2)  # Get more results to filter better
         for idx, score in zip(idxs, scores):
             # score is inner product (cosine because vectors normalized)
             m = metadata[idx]
@@ -411,7 +422,7 @@ def search_top_k(query_embedding: np.ndarray, top_k: int = MAX_RESULTS) -> List[
     else:
         # brute-force using numpy dot product
         sims = embeddings.dot(q.T).squeeze(1)
-        idxs = np.argsort(-sims)[:top_k]
+        idxs = np.argsort(-sims)[:top_k * 2]  # Get more results to filter better
         for idx in idxs:
             score = float(sims[idx])
             m = metadata[idx]
@@ -423,8 +434,13 @@ def search_top_k(query_embedding: np.ndarray, top_k: int = MAX_RESULTS) -> List[
                 'confidence': f"{score * 100:.2f}%"
             })
 
-    # Filter by threshold
+    # Filter by threshold - increased threshold to reduce false positives
     filtered = [r for r in results if r['similarity'] >= SIMILARITY_THRESHOLD]
+    
+    # Additional filtering: if the best match is below a minimum confidence, return empty
+    if filtered and filtered[0]['similarity'] < 0.30:  # Minimum 30% confidence for best match
+        return []
+        
     return filtered[:top_k]
 
 

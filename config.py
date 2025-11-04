@@ -12,7 +12,7 @@ FLASK_PORT = 5001
 DEBUG = False  # Set to False for production
 
 # Search Configuration
-SIMILARITY_THRESHOLD = 0.10  # Lowered for better sensitivity with large datasets
+SIMILARITY_THRESHOLD = 0.25  # Increased from 0.10 to 0.25 (25%) for better accuracy
 MAX_RESULTS = 5  # Maximum number of results to return (most accurate 5)
 
 # Performance Configuration for Large Datasets
@@ -24,5 +24,9 @@ NESTJS_SERVER = 'http://localhost:3000'
 MEDICINES_ENDPOINT = '/medicines'
 
 # Upload Configuration
-UPLOAD_FOLDER = 'uploads'
+UPLOAD_FOLDER = 'uploads/query'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'jfif'}
+
+# Medicine Image Folder (absolute path to medicine images)
+import os
+MEDICINE_IMAGE_FOLDER = os.path.abspath('../midi-vision-server/uploads/medicines')
