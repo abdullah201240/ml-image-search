@@ -1,4 +1,3 @@
-
 import os
 import time
 import json
@@ -19,8 +18,19 @@ from werkzeug.utils import secure_filename
 
 import requests
 
-import torch
-from transformers import CLIPProcessor, CLIPModel
+# Import CLIP components and torch at module level to avoid NameError
+try:
+    from transformers import CLIPProcessor, CLIPModel
+    import torch
+    CLIP_AVAILABLE = True
+except ImportError as e:
+    CLIPModel = None
+    CLIPProcessor = None
+    torch = None
+    CLIP_AVAILABLE = False
+
+# Import configurations from config.py
+from config import *
 
 # Try to import faiss; if not available, we'll use numpy fallback
 try:
@@ -28,27 +38,6 @@ try:
     _HAS_FAISS = True
 except Exception:
     _HAS_FAISS = False
-
-# ----------------------
-# Config
-# ----------------------
-MODEL_NAME = os.getenv('CLIP_MODEL', 'openai/clip-vit-base-patch32')
-DEVICE = os.getenv('DEVICE', 'cuda' if torch.cuda.is_available() else 'cpu')
-UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', 'uploads/query')
-MEDICINE_IMAGE_FOLDER = os.getenv('MEDICINE_IMAGE_FOLDER', os.path.abspath('../midi-vision-server/uploads/medicines'))
-ALLOWED_EXTENSIONS = set(['png', 'jpg', 'jpeg', 'webp'])
-SIMILARITY_THRESHOLD = float(os.getenv('SIMILARITY_THRESHOLD', 0.25))  # Increased from 0.10 to 0.25 (25%)
-MAX_RESULTS = int(os.getenv('MAX_RESULTS', 5))
-BATCH_SIZE = int(os.getenv('BATCH_SIZE', 64))  # Increased for large datasets
-EMBEDDINGS_FILE = os.getenv('EMBEDDINGS_FILE', 'cache/medicine_embeddings.npy')
-METADATA_FILE = os.getenv('METADATA_FILE', 'cache/medicine_metadata.json')
-FAISS_INDEX_FILE = os.getenv('FAISS_INDEX_FILE', 'cache/faiss.index')
-CACHE_REFRESH_SECONDS = int(os.getenv('CACHE_REFRESH_SECONDS', 60 * 30))  # 30 minutes for large datasets
-NESTJS_SERVER = os.getenv('NESTJS_SERVER', 'http://localhost:3000')
-MEDICINES_ENDPOINT = os.getenv('MEDICINES_ENDPOINT', '/medicines')
-FLASK_HOST = os.getenv('FLASK_HOST', '0.0.0.0')
-FLASK_PORT = int(os.getenv('FLASK_PORT', 5001))
-DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
 
 # ----------------------
 # Logging setup
@@ -85,13 +74,26 @@ def allowed_file(filename: str) -> bool:
 
 def load_clip():
     global clip_model, clip_processor
+    if not CLIP_AVAILABLE:
+        raise RuntimeError("CLIP models not available. Please install transformers and torch libraries.")
+        
     if clip_model is None or clip_processor is None:
         logger.info(f"Loading CLIP model: {MODEL_NAME} to {DEVICE}")
-        clip_model = CLIPModel.from_pretrained(MODEL_NAME)
-        clip_processor = CLIPProcessor.from_pretrained(MODEL_NAME)
+        
+        # Try to load the specified model, fallback to openai model if it fails
+        try:
+            clip_model = CLIPModel.from_pretrained(MODEL_NAME)
+            clip_processor = CLIPProcessor.from_pretrained(MODEL_NAME)
+        except Exception as e:
+            logger.warning(f"Failed to load model {MODEL_NAME}: {e}")
+            logger.info("Falling back to openai/clip-vit-base-patch32")
+            fallback_model = "openai/clip-vit-base-patch32"
+            clip_model = CLIPModel.from_pretrained(fallback_model)
+            clip_processor = CLIPProcessor.from_pretrained(fallback_model)
+            
         clip_model.to(DEVICE)
         clip_model.eval()
-        logger.info("CLIP loaded")
+        logger.info(f"CLIP loaded successfully with model: {MODEL_NAME}")
     return clip_model, clip_processor
 
 

@@ -1,6 +1,93 @@
 # ML Image Search Server
 
-This is a Python Flask server that provides image-based medicine search using the CLIP model.
+This is the ML-based image search server for finding similar medicine images.
+
+## Configuration
+
+The server can be configured using environment variables. All configurations are centralized in `config.py`.
+
+### Available Configuration Options
+
+| Environment Variable | Default Value | Description |
+|---------------------|---------------|-------------|
+| `CLIP_MODEL` | `openai/clip-vit-base-patch32` | CLIP model to use for image embeddings |
+| `DEVICE` | `cpu` or `cuda` (auto-detected) | Device to run the model on |
+| `FLASK_HOST` | `0.0.0.0` | Host to bind the server to |
+| `FLASK_PORT` | `5001` | Port to run the server on |
+| `DEBUG` | `false` | Enable debug mode |
+| `SIMILARITY_THRESHOLD` | `0.25` | Minimum similarity threshold for results |
+| `MAX_RESULTS` | `5` | Maximum number of results to return |
+| `BATCH_SIZE` | `64` | Batch size for processing images |
+| `NESTJS_SERVER` | `http://localhost:3000` | Backend server URL |
+| `MEDICINE_IMAGE_FOLDER` | `../midi-vision-server/uploads/medicines` | Path to medicine images |
+
+## Supported Models
+
+### 1. OpenAI CLIP (Default)
+- Model: `openai/clip-vit-base-patch32`
+- No authentication required
+- Good general-purpose model
+
+### 2. EVA02-CLIP (Alternative)
+- Model: `EVA02-CLIP-L-14`
+- Requires Hugging Face authentication
+- Potentially better accuracy but needs setup
+
+## Usage
+
+### Starting the Server
+
+1. **Using the main script:**
+   ```bash
+   python main.py
+   ```
+
+2. **Using the startup script:**
+   ```bash
+   ./start_server.sh
+   ```
+
+3. **With custom configuration:**
+   ```bash
+   export CLIP_MODEL="EVA02-CLIP-L-14"
+   export FLASK_PORT=5002
+   python main.py
+   ```
+
+### Using EVA02-CLIP Model
+
+To use the EVA02-CLIP model:
+
+1. Uncomment and set the model in `start_server.sh`:
+   ```bash
+   export CLIP_MODEL="EVA02-CLIP-L-14"
+   ```
+
+2. Or set it as an environment variable:
+   ```bash
+   export CLIP_MODEL="EVA02-CLIP-L-14"
+   python main.py
+   ```
+
+3. If the model requires authentication, you may need to log in to Hugging Face:
+   ```bash
+   huggingface-cli login
+   ```
+
+## API Endpoints
+
+- `GET /health` - Health check
+- `GET /preload-model` - Preload the CLIP model
+- `POST /rebuild-index` - Rebuild the search index
+- `POST /refresh-medicines` - Refresh medicine data from backend
+- `POST /search` - Search for similar medicines by image
+
+## Error Handling
+
+The server includes fallback mechanisms:
+- If the specified model fails to load, it will fall back to `openai/clip-vit-base-patch32`
+- Network errors are handled gracefully with retries
+- Invalid images are skipped during processing
 
 ## Setup Instructions
 
