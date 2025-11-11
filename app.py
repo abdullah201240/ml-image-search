@@ -15,6 +15,7 @@ from io import BytesIO
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+from werkzeug.exceptions import RequestEntityTooLarge
 
 import requests
 
@@ -50,6 +51,8 @@ logger = logging.getLogger('ml-image-search')
 # ----------------------
 app = Flask(__name__)
 CORS(app)
+# Set maximum upload size to 15 MB
+app.config['MAX_CONTENT_LENGTH'] = 15 * 1024 * 1024
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(os.path.dirname(EMBEDDINGS_FILE), exist_ok=True)
 
@@ -573,6 +576,10 @@ def search_by_image():
                 pass
         return jsonify({'error': f'Internal server error: {str(e)}'}), 500
 
+
+@app.errorhandler(RequestEntityTooLarge)
+def handle_file_too_large(e):
+    return jsonify({'error': 'File is too large. Maximum size is 15 MB.'}), 413
 
 # ----------------------
 # Startup
